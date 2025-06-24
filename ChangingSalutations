@@ -1,0 +1,113 @@
+import pandas as pd
+import time
+import os
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.firefox.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.keys import Keys
+from webdriver_manager.firefox import GeckoDriverManager
+
+csv_path = r''
+xlsx_output = r''
+columns_to_keep = ['individual', 'household', 'name_t', 'profile_id', 'salutation', 'first_name']
+
+first_time = input("Is this your first time running the script? (yes/no): ").strip().lower()
+
+if first_time == 'yes':
+    df = pd.read_csv(csv_path)
+    df.columns = [col.lower().strip() for col in df.columns]
+
+    if df.columns[0].startswith('\ufeff'):
+        df.columns.values[0] = df.columns[0].replace('\ufeff', '').strip().strip('"')
+
+    df['household'] = df['household'].replace('', pd.NA)
+    df = df[df['household'].isna()]
+
+    df_filtered_export = df[[col for col in columns_to_keep if col in df.columns]]
+    df_filtered_export.to_excel(xlsx_output, index=False)
+    print(f"Saved {len(df_filtered_export)} filtered rows to: {xlsx_output}")
+
+if not os.path.exists(xlsx_output):
+    print(f"Error: Could not find {xlsx_output}. Run script with 'yes' first.")
+    exit()
+
+df = pd.read_excel(xlsx_output, dtype={'profile_id': str})
+df.columns = [col.lower().strip() for col in df.columns]
+
+df['salutation'] = df['salutation'].fillna('').astype(str).str.strip()
+df['first_name'] = df['first_name'].fillna('').astype(str).str.strip()
+df = df[df['profile_id'].notna() & (df['profile_id'].astype(str).str.strip() != '')]
+
+condition_set_salutation = (
+    ((df['salutation'].str.lower() == '') | (df['salutation'].str.lower() == 'sir or madam')) &
+    (df['first_name'] != '')
+)
+
+condition_clear_salutation = (
+    (df['first_name'] == '') &
+    (df['salutation'] != '')
+)
+
+df_filtered = df[condition_set_salutation | condition_clear_salutation]
+print(f"{len(df_filtered)} profiles need salutation updates/clears.")
+
+driver = webdriver.Firefox(service=Service(GeckoDriverManager().install()))
+driver.maximize_window()
+driver.get(r'')
+
+username = 
+password = 
+
+username_input = driver.find_element(By.XPATH, "//label[text()='Username']/preceding-sibling::input")
+password_input = driver.find_element(By.XPATH, "//label[text()='Password']/preceding-sibling::input")
+username_input.send_keys(username)
+password_input.send_keys(password + Keys.RETURN)
+
+print("Please complete 2FA manually if prompted. Waiting up to 90 seconds...")
+WebDriverWait(driver, 90).until(EC.url_contains("home"))
+
+for index, row in df_filtered.iterrows():
+    profile_id = row['profile_id']
+    first_name = row['first_name']
+    salutation = row['salutation']
+    print(f"\nOpening profile for {profile_id}")
+
+    profile_url = f''
+    driver.get(profile_url)
+
+    try:
+        sal_input = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//th[text()='Salutation']/following-sibling::td/input")
+            )
+        )
+        current_salutation = sal_input.get_attribute('value').strip()
+
+        if first_name == '':
+            if current_salutation:
+                sal_input.clear()
+                print(f"Cleared salutation for {profile_id} (no first_name)")
+            else:
+                print(f"Salutation already empty for {profile_id}")
+        elif current_salutation.lower() in ['', 'sir or madam']:
+            sal_input.clear()
+            sal_input.send_keys(first_name)
+            print(f"Set salutation to '{first_name}' for profile {profile_id}")
+        else:
+            print(f"Salutation already valid: '{current_salutation}'")
+
+        save_button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, "//input[@type='submit' and @value='Save']"))
+        )
+        save_button.click()
+        time.sleep(2)
+
+    except Exception as e:
+        print(f"Could not update profile {profile_id}: {e}")
+
+    time.sleep(1)
+
+driver.quit()
+print("\nAll done!")
